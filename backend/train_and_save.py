@@ -27,10 +27,11 @@ MODEL_DIR.mkdir(exist_ok=True)
 
 # ── 1. Cargar parquets locales ────────────────────────────────────────────────
 print("📦 Cargando parquets locales...")
-eventos  = pd.read_parquet(ROOT / "eventos.parquet")
-productos = pd.read_parquet(ROOT / "productos.parquet")
-bodegas  = pd.read_parquet(ROOT / "bodegas.parquet")
-stock    = pd.read_parquet(ROOT / "stock.parquet")
+DATA_DIR = ROOT / "data"
+eventos  = pd.read_parquet(DATA_DIR / "eventos.parquet")
+productos = pd.read_parquet(DATA_DIR / "productos.parquet")
+bodegas  = pd.read_parquet(DATA_DIR / "bodegas.parquet")
+stock    = pd.read_parquet(DATA_DIR / "stock.parquet")
 
 print(f"   eventos   : {len(eventos):,} filas")
 print(f"   productos : {len(productos):,} filas")

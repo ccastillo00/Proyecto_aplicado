@@ -1,0 +1,28 @@
+GUÍA DE FUNCIONAMIENTO DE LA APP
+=================================
+
+Este sistema es una herramienta de optimización de precios basada en Inteligencia Artificial.
+
+1. COMPONENTES PRINCIPALES
+---------------------------
+- Backend: FastAPI (Python) que sirve el modelo XGBoost.
+- Frontend: React + Vite con una interfaz premium y dinámica.
+- Modelo: XGBoost Regressor entrenado para predecir demanda basada en precios y stock.
+
+2. MÉTRICAS Y KPIS (Dashboard)
+------------------------------
+- GMROI: Retorno de inversión en inventario. Se recalcula en tiempo real al simular precios.
+- SELL-THROUGH: Porcentaje de stock que se espera vender basado en la demanda proyectada.
+- MARGEN BRUTO: Rentabilidad porcentual proyectada para el SKU seleccionado.
+- SKUS MODIFICADOS: Contador de productos que cumplen con los filtros aplicados.
+
+3. FUNCIONALIDADES CLAVE
+-------------------------
+- Top 20 por Inventario: Al iniciar, la app muestra los 20 productos con más stock (prioridad de liquidación/ajuste).
+- Filtros Dinámicos: Filtrado por Zona (Ciudad), Género, Categoría y Marca.
+- Simulador de Escenarios: Al seleccionar un SKU, puedes ver cómo afectaría un cambio de precio (-10%, -20%, etc.) al GMROI.
+- Exportación: Botón para descargar las sugerencias de precios en formato CSV.
+
+4. LÓGICA DE NEGOCIO
+---------------------
+El modelo XGBoost utiliza datos históricos de ventas, características del producto (marca, categoría) y ubicación para entender la elasticidad de la demanda. Esto permite sugerir precios que maximicen la rotación del inventario sin sacrificar excesivamente el margen.
