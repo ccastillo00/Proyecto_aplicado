@@ -1,0 +1,15 @@
+# Artefactos del modelo (pueden ser grandes, se generan con train_and_save.py)
+backend/model/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Node
+Front/node_modules/
+Front/dist/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/

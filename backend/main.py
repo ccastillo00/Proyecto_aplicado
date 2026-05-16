@@ -1,11 +1,15 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from pathlib import Path
+import json
 import pandas as pd
 import numpy as np
 import xgboost as xgb
 import warnings
 warnings.filterwarnings('ignore')
+
+MODEL_DIR = Path(__file__).parent / "model"
 
 app = FastAPI(title="Pricing AI Backend")
 
@@ -61,7 +65,7 @@ def train_xgboost(df):
     df_ml.sort_values(by='fecha', ascending=True, inplace=True)
     
     # Seleccionar features. Asumimos las comunes
-    categorical_cols = ['id_producto', 'id_bodega', 'marca', 'categoria', 'subcategoria', 'genero', 'zona', 'region']
+    categorical_cols = ['id_producto', 'id_bodega', 'marca', 'categoria', 'subcategoria', 'genero', 'ciudad', 'region']
     features = ['precio_promedio', 'stock_actual']
     
     for col in categorical_cols:
@@ -99,22 +103,65 @@ def train_xgboost(df):
 
 @app.on_event("startup")
 def startup_event():
-    df = load_and_prepare_data()
-    modelo_xgb, features, df_ml = train_xgboost(df)
-    
-    data_store['df_ml'] = df_ml
-    data_store['modelo_xgb'] = modelo_xgb
-    data_store['features'] = features
-    print("Backend inicializado y listo.")
+    model_path    = MODEL_DIR / "xgb_model.json"
+    features_path = MODEL_DIR / "features.json"
+    df_path       = MODEL_DIR / "df_ml.parquet"
+
+    if model_path.exists() and features_path.exists() and df_path.exists():
+        # ── Carga rápida desde disco (< 1 segundo) ──────────────────────────
+        print("⚡ Cargando modelo pre-entrenado desde disco...")
+
+        modelo_xgb = xgb.XGBRegressor()
+        modelo_xgb.load_model(str(model_path))
+
+        with open(features_path) as f:
+            features = json.load(f)
+
+        df_ml = pd.read_parquet(str(df_path))
+
+        # Re-aplicar tipos categóricos que XGBoost necesita
+        cat_cols = [c for c in features if df_ml[c].dtype == object]
+        for col in cat_cols:
+            df_ml[col] = df_ml[col].astype('category')
+
+        print(f"   Modelo cargado | {len(df_ml):,} filas | {len(features)} features")
+    else:
+        # ── Fallback: descarga + entrena (primera vez sin artefactos) ────────
+        print("⚠️  Modelo no encontrado. Entrenando desde cero (esto tarda ~2 min)...")
+        print("   Tip: ejecuta  python backend/train_and_save.py  para evitar esto.")
+        df = load_and_prepare_data()
+        modelo_xgb, features, df_ml = train_xgboost(df)
+
+        # Auto-guardar para próximas arrancadas
+        MODEL_DIR.mkdir(exist_ok=True)
+        modelo_xgb.save_model(str(MODEL_DIR / "xgb_model.json"))
+        with open(MODEL_DIR / "features.json", "w") as f:
+            json.dump(features, f)
+        df_save = df_ml[[c for c in df_ml.columns if c in features + [
+            'fecha','cantidad','id_producto','id_bodega',
+            'precio_promedio','stock_actual','costo',
+            'marca','genero','categoria','subcategoria','ciudad','region'
+        ]]].copy()
+        for col in df_save.select_dtypes(['category']).columns:
+            df_save[col] = df_save[col].astype(str)
+        df_save.to_parquet(str(MODEL_DIR / "df_ml.parquet"), index=False)
+        print("   ✅ Artefactos guardados en backend/model/")
+
+    data_store['df_ml']       = df_ml
+    data_store['modelo_xgb']  = modelo_xgb
+    data_store['features']    = features
+    print("✅ Backend listo.")
 
 @app.get("/api/filters")
 def get_filters():
     df = data_store['df_ml']
+    # 'ciudad' es la columna de ubicación en bodegas (no existe 'zona')
+    zona_col = 'ciudad' if 'ciudad' in df.columns else 'region'
     return {
-        "zonas": ["Todas las zonas"] + (df['zona'].dropna().unique().tolist() if 'zona' in df.columns else []),
-        "generos": ["Todos los géneros"] + (df['genero'].dropna().unique().tolist() if 'genero' in df.columns else []),
-        "marcas": ["Todas las marcas"] + (df['marca'].dropna().unique().tolist() if 'marca' in df.columns else []),
-        "categorias": ["Todas las categorias"] + (df['categoria'].dropna().unique().tolist() if 'categoria' in df.columns else [])
+        "zonas": ["Todas las zonas"] + sorted(df[zona_col].dropna().unique().tolist()) if zona_col in df.columns else ["Todas las zonas"],
+        "generos": ["Todos los géneros"] + sorted(df['genero'].dropna().unique().tolist()) if 'genero' in df.columns else ["Todos los géneros"],
+        "marcas": ["Todas las marcas"] + sorted(df['marca'].dropna().unique().tolist()) if 'marca' in df.columns else ["Todas las marcas"],
+        "categorias": ["Todas las categorias"] + sorted(df['categoria'].dropna().unique().tolist()) if 'categoria' in df.columns else ["Todas las categorias"]
     }
 
 @app.get("/api/skus")
@@ -123,25 +170,32 @@ def get_skus():
     # Extraer el último registro por SKU para poblar la tabla
     last_records = df.sort_values('fecha').groupby('id_producto').tail(1)
     
+    # 'ciudad' es la columna real de ubicación (bodegas no tiene 'zona')
+    zona_col = 'ciudad' if 'ciudad' in last_records.columns else 'region'
+    
     # Mapear al formato esperado por el frontend
     skus_list = []
     for _, row in last_records.iterrows():
         sku_id = str(row['id_producto'])
+        zona_val = str(row[zona_col]) if zona_col in row.index and pd.notna(row[zona_col]) else 'Sin ciudad'
         skus_list.append({
             "sku": sku_id,
-            "zona": str(row.get('zona', 'N/A')),
-            "marca": str(row.get('marca', 'N/A')),
-            "genero": str(row.get('genero', 'N/A')),
-            "prenda": str(row.get('categoria', 'N/A')),
-            "subtipo": str(row.get('subcategoria', 'N/A')),
+            "zona": zona_val,
+            "marca": str(row['marca']) if pd.notna(row.get('marca')) else 'N/A',
+            "genero": str(row['genero']) if pd.notna(row.get('genero')) else 'N/A',
+            "prenda": str(row['categoria']) if pd.notna(row.get('categoria')) else 'N/A',
+            "subtipo": str(row['subcategoria']) if pd.notna(row.get('subcategoria')) else 'N/A',
             "cat": "A",
             "tiempo": "Reciente",
             "precioAct": f"${row['precio_promedio']:,.0f}",
-            "precioSug": f"${row['precio_promedio']*0.9:,.0f}", # Sugerencia basica inicial
+            "precioSug": f"${row['precio_promedio'] * 0.9:,.0f}",
             "precio_num": float(row['precio_promedio']),
             "stock": int(row.get('stock_actual', 0)),
             "costo_num": float(row.get('costo', 0))
         })
+    
+    # Ordenar por stock descendente (mayor inventario primero)
+    skus_list.sort(key=lambda x: x['stock'], reverse=True)
     return skus_list
 
 class SimulationRequest(BaseModel):
