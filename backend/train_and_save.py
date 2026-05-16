@@ -75,8 +75,7 @@ df_ml.sort_values("fecha", ascending=True, inplace=True)
 
 # Features: 'ciudad' en lugar de 'zona' (bodegas no tiene columna zona)
 categorical_cols = [
-    "id_producto", "id_bodega", "marca", "categoria",
-    "subcategoria", "genero", "ciudad", "region",
+    "marca", "categoria", "subcategoria", "genero", "ciudad", "region",
 ]
 features = ["precio_promedio", "stock_actual"]
 

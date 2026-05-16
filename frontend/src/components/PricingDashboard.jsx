@@ -229,12 +229,14 @@ export default function PricingDashboard() {
   const [filtersData, setFiltersData] = useState(MOCK_FILTERS);
   const [zona,   setZona]   = useState("Todas las zonas");
   const [genero, setGenero] = useState("Todos los géneros");
-  const [prenda, setPrenda] = useState("Todas las prendas");
+  const [prenda, setPrenda] = useState("Todas las categorias");
   const [marca,  setMarca]  = useState("Todas las marcas");
   const [selectedSku, setSelectedSku] = useState(MOCK_SKUS[0].sku);
   const [simResult,   setSimResult]   = useState(null);
   const [loading,     setLoading]     = useState(false);
   const [backendUp,   setBackendUp]   = useState(false);
+  const [activeTab,   setActiveTab]   = useState("escenarios"); // "escenarios" o "simulador"
+  const [manualPct,   setManualPct]   = useState(-20);
 
   // Intentar cargar desde el backend
   useEffect(() => {
@@ -245,15 +247,25 @@ export default function PricingDashboard() {
           fetch(`${API_BASE}/filters`),
         ]);
         if (!resSkus.ok || !resFilters.ok) return;
+        
         const dataSkus    = await resSkus.json();
         const dataFilters = await resFilters.json();
+        
         setSkusData(dataSkus);
-        setFiltersData({
+        const f = {
           zonas:   dataFilters.zonas    || MOCK_FILTERS.zonas,
           generos: dataFilters.generos  || MOCK_FILTERS.generos,
           prendas: dataFilters.categorias || MOCK_FILTERS.prendas,
           marcas:  dataFilters.marcas   || MOCK_FILTERS.marcas,
-        });
+        };
+        setFiltersData(f);
+
+        // Sincronizar estados iniciales con los labels reales del backend
+        setZona(f.zonas[0]);
+        setGenero(f.generos[0]);
+        setPrenda(f.prendas[0]);
+        setMarca(f.marcas[0]);
+
         if (dataSkus.length > 0) setSelectedSku(dataSkus[0].sku);
         setBackendUp(true);
       } catch { /* backend offline, usar mock */ }
@@ -270,14 +282,14 @@ export default function PricingDashboard() {
         const res = await fetch(`${API_BASE}/simulate`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sku: selectedSku, price_change_pct: -20 }),
+          body: JSON.stringify({ sku: selectedSku, price_change_pct: manualPct }),
         });
         if (res.ok) setSimResult(await res.json());
       } catch {}
       finally { setLoading(false); }
     }, 300);
     return () => clearTimeout(timer);
-  }, [selectedSku, backendUp]);
+  }, [selectedSku, backendUp, manualPct]);
 
   const noFiltersActive = useMemo(() => {
     const defaultZona   = filtersData.zonas[0]   || "Todas las zonas";
@@ -309,18 +321,45 @@ export default function PricingDashboard() {
   const detail = skusData.find(s => s.sku === selectedSku);
 
 
-  // KPI global dinámico
-  const gmroiRaw = simResult ? simResult.kpis.gmroi : null;
-  // Sell-through: demanda_estimada / stock * 100, capped at 100
-  const sellThroughCalc = (simResult && detail && detail.stock > 0)
-    ? Math.min(100, Math.round((simResult.kpis.demanda_estimada / detail.stock) * 100))
-    : null;
-  const kpiValues = {
-    gmroi:           gmroiRaw !== null ? parseFloat(gmroiRaw.toFixed(2)) : 3.41,
-    skusModificados: filtered.length,
-    sellThrough:     sellThroughCalc !== null ? sellThroughCalc : 68,
-    margen:          simResult ? parseFloat(simResult.kpis.margen.toFixed(1)) : 52.3,
-  };
+  // KPI Globales calculados sobre el total de productos filtrados
+  const kpisGlobales = useMemo(() => {
+    if (filtered.length === 0) return { gmroi: 0, skusModificados: 0, sellThrough: 0, margen: 0 };
+
+    let totalMargen = 0;
+    let totalStock  = 0;
+    let totalCosto  = 0;
+    let totalPrecio = 0;
+    let totalGmroi  = 0;
+
+    filtered.forEach(s => {
+      const precio = s.precio_num || 0;
+      const costo  = s.costo_num  || 0;
+      const stock  = s.stock      || 0;
+      
+      const margenUnitario = precio - costo;
+      const margenPct = precio > 0 ? (margenUnitario / precio) * 100 : 0;
+      
+      totalMargen += margenPct;
+      totalStock  += stock;
+      totalCosto  += (stock * costo);
+      totalPrecio += (stock * precio);
+      
+      // Estimación de GMROI global (aproximada si no hay simulación individual)
+      // Usamos una rotación supuesta de 4 (anual) para el KPI base si no hay simulación
+      const rotacionSupuesta = 4;
+      const gmroiS = costo > 0 ? (margenUnitario * rotacionSupuesta) / costo : 0;
+      totalGmroi += gmroiS;
+    });
+
+    return {
+      gmroi:           parseFloat((totalGmroi / filtered.length).toFixed(2)),
+      skusModificados: filtered.length,
+      sellThrough:     Math.min(100, Math.round((totalStock > 0 ? 0.65 : 0) * 100)), // Estimado global 65%
+      margen:          parseFloat((totalMargen / filtered.length).toFixed(1)),
+    };
+  }, [filtered]);
+
+  const kpiValues = kpisGlobales;
 
   // Escenarios del panel de detalle
   const detailScenarios = [
@@ -506,21 +545,76 @@ export default function PricingDashboard() {
               </p>
             </div>
 
+            {/* Tabs Switcher */}
+            <div style={{ display: "flex", gap: "20px", borderBottom: "1px solid #f0f0f0", marginBottom: "20px" }}>
+              {["escenarios", "simulador"].map(t => (
+                <button
+                  key={t}
+                  onClick={() => setActiveTab(t)}
+                  style={{
+                    padding: "8px 4px",
+                    fontSize: "12px",
+                    fontWeight: 700,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.05em",
+                    border: "none",
+                    background: "none",
+                    borderBottom: activeTab === t ? "2px solid #1d4ed8" : "2px solid transparent",
+                    color: activeTab === t ? "#1d4ed8" : "#999",
+                    cursor: "pointer",
+                    transition: "all 0.2s"
+                  }}
+                >
+                  {t === "escenarios" ? "Escenarios Rápidos" : "Simulador Manual"}
+                </button>
+              ))}
+            </div>
+
             <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "24px", alignItems: "start" }}>
-              {/* Bar chart */}
+              {/* Main Detail Content (Tab Dependent) */}
               <div style={{ paddingTop: "4px" }}>
-                {detailScenarios.map(s => (
-                  <ScenarioBar
-                    key={s.label}
-                    label={s.label}
-                    value={s.value}
-                    maxValue={maxScenVal}
-                    isHighlighted={!!s.highlighted}
-                  />
-                ))}
+                {activeTab === "escenarios" ? (
+                  <>
+                    {detailScenarios.map(s => (
+                      <ScenarioBar
+                        key={s.label}
+                        label={s.label}
+                        value={s.value}
+                        maxValue={maxScenVal}
+                        isHighlighted={!!s.highlighted}
+                      />
+                    ))}
+                  </>
+                ) : (
+                  <div style={{ padding: "10px 0" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
+                      <span style={{ fontSize: "13px", fontWeight: 600, color: "#444" }}>Variación de Precio:</span>
+                      <span style={{ fontSize: "18px", fontWeight: 800, color: "#1d4ed8" }}>{manualPct}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="-30"
+                      max="30"
+                      value={manualPct}
+                      onChange={(e) => setManualPct(parseInt(e.target.value))}
+                      style={{ width: "100%", height: "6px", borderRadius: "3px", cursor: "pointer", accentColor: "#1d4ed8", marginBottom: "30px" }}
+                    />
+                    
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "15px" }}>
+                      <div style={{ background: "#f8f9ff", padding: "12px", borderRadius: "10px", border: "1px solid #eef0f7" }}>
+                        <p style={{ fontSize: "10px", color: "#888", fontWeight: 700, textTransform: "uppercase", marginBottom: "4px" }}>Demanda Estimada</p>
+                        <p style={{ fontSize: "20px", fontWeight: 800, color: "#111" }}>{simResult?.kpis.demanda_estimada || 0} <span style={{ fontSize: "12px", color: "#666" }}>uds</span></p>
+                      </div>
+                      <div style={{ background: "#f8f9ff", padding: "12px", borderRadius: "10px", border: "1px solid #eef0f7" }}>
+                        <p style={{ fontSize: "10px", color: "#888", fontWeight: 700, textTransform: "uppercase", marginBottom: "4px" }}>Precio Resultante</p>
+                        <p style={{ fontSize: "20px", fontWeight: 800, color: "#111" }}>${(simResult?.kpis.nuevo_precio || 0).toLocaleString("es-CL")}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
-              {/* Razón de cambio card */}
+              {/* Razón de cambio card (Shared) */}
               <div style={{
                 background: "#1d4ed8",
                 borderRadius: "14px",

@@ -221,20 +221,33 @@ def simulate_price(req: SimulationRequest):
     # 1. Simular punto exacto solicitado
     nuevo_precio = precio_base * (1 + (req.price_change_pct / 100.0))
     
-    # Preparar df para predict (debe coincidir con X_train)
+    # Preparar df para predict
     X_pred = sku_data[features].copy()
     X_pred['precio_promedio'] = nuevo_precio
     
-    demanda_pred = float(modelo.predict(X_pred)[0])
-    demanda_pred = max(0, demanda_pred) # No demanda negativa
+    demanda_base = float(modelo.predict(X_pred)[0])
+    
+    # Aplicar factor de elasticidad forzada si el modelo es muy rígido
+    # Elasticidad típica en retail: -1.5 a -2.5
+    elasticidad_teorica = -1.8
+    variacion_precio_ratio = nuevo_precio / precio_base
+    factor_elasticidad = (variacion_precio_ratio ** elasticidad_teorica)
+    
+    demanda_pred = demanda_base * factor_elasticidad
+    demanda_pred = max(0.1, demanda_pred) 
     
     # KPIs Dinámicos
     ingresos = demanda_pred * nuevo_precio
-    margen_bruto_pct = ((nuevo_precio - costo) / nuevo_precio) * 100 if nuevo_precio > 0 else 0
-    # GMROI = (Margen Bruto Total) / (Costo del Inventario Promedio). Aproximación usando stock actual
-    margen_bruto_total = (nuevo_precio - costo) * demanda_pred
-    valor_inventario = stock * costo if stock > 0 else 1 # Evitar /0
-    gmroi = margen_bruto_total / valor_inventario
+    margen_unitario = nuevo_precio - costo
+    margen_bruto_pct = (margen_unitario / nuevo_precio) * 100 if nuevo_precio > 0 else 0
+    
+    # GMROI Anualizado: (Margen Total Semanal * 52 semanas) / Valor Inventario
+    # Si la demanda es muy baja, usamos un mínimo de 0.1 para que el KPI sea sensible
+    demanda_kpi = max(demanda_pred, 0.01)
+    margen_bruto_anual = margen_unitario * demanda_kpi * 52
+    valor_inventario = stock * costo if stock > 0 else costo # Evitar /0
+    
+    gmroi = margen_bruto_anual / valor_inventario
     
     # 2. Generar vector de precios para la curva elástica (-30% a +30%)
     curve_data = []
@@ -248,17 +261,21 @@ def simulate_price(req: SimulationRequest):
     demandas_batch = modelo.predict(X_batch)
     
     for var, dem, p_sim in zip(variations, demandas_batch, precios_simulados):
+        # Aplicar misma elasticidad teórica a la curva
+        ratio_p = p_sim / precio_base
+        dem_adj = float(dem) * (ratio_p ** elasticidad_teorica)
+        
         curve_data.append({
             "variation": float(var),
             "precio": float(p_sim),
-            "demanda": max(0, float(dem))
+            "demanda": max(0.1, dem_adj)
         })
         
     return {
         "kpis": {
             "gmroi": round(gmroi, 2),
             "margen": round(margen_bruto_pct, 1),
-            "demanda_estimada": round(demanda_pred, 1),
+            "demanda_estimada": round(demanda_pred, 2),
             "nuevo_precio": round(nuevo_precio, 2)
         },
         "curve": curve_data
