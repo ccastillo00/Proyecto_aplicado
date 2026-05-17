@@ -58,15 +58,36 @@ def load_and_prepare_data():
     return df
 
 def train_xgboost(df):
-    print("Preparando data y entrenando XGBoost...")
-    # 1. Ordenar cronológicamente
+    print("Preparando data y entrenando XGBoost con características optimizadas...")
+    # 1. Ordenar cronológicamente y por series temporales para lags
     df_ml = df.copy()
     df_ml['fecha'] = pd.to_datetime(df_ml['fecha'])
-    df_ml.sort_values(by='fecha', ascending=True, inplace=True)
+    df_ml.sort_values(by=['id_producto', 'id_bodega', 'fecha'], ascending=True, inplace=True)
+    
+    # 1. Variables de estacionalidad temporal
+    df_ml["mes"] = df_ml["fecha"].dt.month
+    df_ml["dia_semana"] = df_ml["fecha"].dt.dayofweek
+    df_ml["es_fin_de_semana"] = df_ml["dia_semana"].isin([5, 6]).astype(int)
+
+    # 2. Variables de retraso (Lags) y promedios móviles
+    df_ml["cantidad_lag_1"] = df_ml.groupby(["id_producto", "id_bodega"])["cantidad"].shift(1).fillna(0)
+    df_ml["cantidad_lag_7"] = df_ml.groupby(["id_producto", "id_bodega"])["cantidad"].shift(7).fillna(0)
+    df_ml["cantidad_roll_mean_7"] = (
+        df_ml.groupby(["id_producto", "id_bodega"])["cantidad"]
+        .transform(lambda x: x.shift(1).rolling(window=7, min_periods=1).mean())
+        .fillna(0)
+    )
+
+    # Volver a ordenar cronológicamente para el split temporal estricto (80/20)
+    df_ml.sort_values("fecha", ascending=True, inplace=True)
     
     # Seleccionar features. Asumimos las comunes
     categorical_cols = ['id_producto', 'id_bodega', 'marca', 'categoria', 'subcategoria', 'genero', 'ciudad', 'region']
-    features = ['precio_promedio', 'stock_actual']
+    features = [
+        "precio_promedio", "stock_actual", 
+        "mes", "dia_semana", "es_fin_de_semana", 
+        "cantidad_lag_1", "cantidad_lag_7", "cantidad_roll_mean_7"
+    ]
     
     for col in categorical_cols:
         if col in df_ml.columns:
@@ -76,7 +97,7 @@ def train_xgboost(df):
     # Dropear NAs en features
     df_ml = df_ml.dropna(subset=features + ['cantidad'])
             
-    # 2. Split temporal estricto (80/20) - NO train_test_split aleatorio
+    # 2. Split temporal estricto (80/20)
     split_idx = int(len(df_ml) * 0.8)
     train_df = df_ml.iloc[:split_idx]
     test_df = df_ml.iloc[split_idx:]
@@ -87,13 +108,17 @@ def train_xgboost(df):
     X_test = test_df[features]
     y_test = test_df['cantidad']
     
-    # 3. Entrenar modelo
+    # 3. Entrenar modelo optimizado con regularización
     modelo_xgb = xgb.XGBRegressor(
-        n_estimators=100, 
-        learning_rate=0.1, 
-        max_depth=6, 
-        enable_categorical=True, 
-        tree_method='hist', 
+        n_estimators=300,
+        learning_rate=0.05,
+        max_depth=5,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        reg_alpha=0.1,
+        reg_lambda=1.0,
+        enable_categorical=True,
+        tree_method='hist',
         random_state=42
     )
     modelo_xgb.fit(X_train, y_train)

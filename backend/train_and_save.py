@@ -67,17 +67,41 @@ if "costo" not in df.columns:
 print(f"   Dataset final: {len(df):,} filas, {df.shape[1]} columnas")
 
 # ── 3. Entrenar XGBoost ───────────────────────────────────────────────────────
-print("\n🤖 Entrenando XGBoost (split temporal 80/20)...")
+print("\n🤖 Entrenando XGBoost con características optimizadas...")
 
 df_ml = df.copy()
 df_ml["fecha"] = pd.to_datetime(df_ml["fecha"])
+
+# Ordenar por serie temporal SKU-Bodega-Fecha para generar lags correctos
+print("   Generando variables de estacionalidad y lag (historial)...")
+df_ml.sort_values(by=["id_producto", "id_bodega", "fecha"], ascending=True, inplace=True)
+
+# 1. Variables de estacionalidad temporal
+df_ml["mes"] = df_ml["fecha"].dt.month
+df_ml["dia_semana"] = df_ml["fecha"].dt.dayofweek
+df_ml["es_fin_de_semana"] = df_ml["dia_semana"].isin([5, 6]).astype(int)
+
+# 2. Variables de retraso (Lags) y promedios móviles
+df_ml["cantidad_lag_1"] = df_ml.groupby(["id_producto", "id_bodega"])["cantidad"].shift(1).fillna(0)
+df_ml["cantidad_lag_7"] = df_ml.groupby(["id_producto", "id_bodega"])["cantidad"].shift(7).fillna(0)
+df_ml["cantidad_roll_mean_7"] = (
+    df_ml.groupby(["id_producto", "id_bodega"])["cantidad"]
+    .transform(lambda x: x.shift(1).rolling(window=7, min_periods=1).mean())
+    .fillna(0)
+)
+
+# Volver a ordenar cronológicamente para el split temporal estricto (80/20)
 df_ml.sort_values("fecha", ascending=True, inplace=True)
 
 # Features: 'ciudad' en lugar de 'zona' (bodegas no tiene columna zona)
 categorical_cols = [
     "marca", "categoria", "subcategoria", "genero", "ciudad", "region",
 ]
-features = ["precio_promedio", "stock_actual"]
+features = [
+    "precio_promedio", "stock_actual", 
+    "mes", "dia_semana", "es_fin_de_semana", 
+    "cantidad_lag_1", "cantidad_lag_7", "cantidad_roll_mean_7"
+]
 
 for col in categorical_cols:
     if col in df_ml.columns:
@@ -94,10 +118,15 @@ y_test  = df_ml.iloc[split_idx:]["cantidad"]
 
 print(f"   Train: {len(X_train):,} | Test: {len(X_test):,}")
 
+# Inicializar XGBoost con hiperparámetros optimizados y regularización
 modelo_xgb = xgb.XGBRegressor(
-    n_estimators=100,
-    learning_rate=0.1,
-    max_depth=6,
+    n_estimators=300,
+    learning_rate=0.05,
+    max_depth=5,
+    subsample=0.8,
+    colsample_bytree=0.8,
+    reg_alpha=0.1,
+    reg_lambda=1.0,
     enable_categorical=True,
     tree_method="hist",
     random_state=42,
@@ -107,7 +136,7 @@ modelo_xgb.fit(X_train, y_train)
 # Métrica rápida
 y_pred = modelo_xgb.predict(X_test)
 mape = np.mean(np.abs((y_test - y_pred) / (y_test.clip(lower=1)))) * 100
-print(f"   MAPE en test: {mape:.1f}%")
+print(f"   MAPE en test (Optimizado): {mape:.1f}%")
 
 # ── 4. Guardar artefactos ─────────────────────────────────────────────────────
 print("\n💾 Guardando artefactos en backend/model/ ...")
