@@ -1,0 +1,42 @@
+GUÍA DE DESPLIEGUE Y EJECUCIÓN
+================================
+
+Para poner en marcha el sistema de Precios Dinámicos, sigue estos pasos en dos terminales separadas:
+
+1. CONFIGURACIÓN DEL BACKEND (FastAPI)
+--------------------------------------
+Desde la raíz del proyecto (Proyecto_aplicado):
+
+a) Activar entorno de Python:
+   conda activate proyecto_miad
+
+b) Instalar dependencias (si es necesario):
+   pip install -r requirements.txt
+
+c) Iniciar el servidor:
+   uvicorn backend.main:app --reload
+
+* El backend estará disponible en http://localhost:8000
+* El backend carga automáticamente el modelo desde backend/model/
+
+
+2. CONFIGURACIÓN DEL FRONTEND (React + Vite)
+--------------------------------------------
+Desde la carpeta "frontend":
+
+a) Entrar a la carpeta:
+   cd frontend
+
+b) Instalar dependencias (solo la primera vez):
+   npm install
+
+c) Iniciar la aplicación:
+   npm run dev
+
+* El dashboard estará disponible en la URL que indique la terminal (ej: http://localhost:5173)
+
+
+REQUISITOS PREVIOS:
+- Python 3.9+
+- Node.js 18+
+- Los archivos .parquet deben estar en la carpeta /data para el entrenamiento inicial.

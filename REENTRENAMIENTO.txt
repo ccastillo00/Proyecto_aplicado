@@ -1,0 +1,36 @@
+GUÍA DE REENTRENAMIENTO CON NUEVOS DATOS
+=========================================
+
+Si tienes nuevos archivos de ventas o stock, sigue estos pasos para actualizar el modelo de Inteligencia Artificial:
+
+1. PREPARACIÓN DE DATOS
+-----------------------
+- Coloca tus nuevos archivos .parquet en la carpeta: /data/
+- Asegúrate de que los nombres coincidan:
+    * eventos.parquet
+    * productos.parquet
+    * bodegas.parquet
+    * stock.parquet
+
+2. EJECUCIÓN DEL ENTRENAMIENTO
+------------------------------
+Desde la terminal en la raíz del proyecto:
+
+   python backend/train_and_save.py
+
+Este script realizará lo siguiente de forma automática:
+a) Cargará los datos de /data/
+b) Limpiará y preparará las variables para el modelo.
+c) Entrenará un nuevo modelo XGBoost (Split temporal 80/20).
+d) Generará nuevos archivos en backend/model/ (modelo, features y datos procesados).
+
+3. REINICIO DEL SERVICIO
+------------------------
+Una vez que el script de entrenamiento termine con el mensaje "🎉 Listo", simplemente reinicia tu servidor de backend:
+
+   - Detén el comando uvicorn (Ctrl+C).
+   - Ejecuta de nuevo: uvicorn backend.main:app --reload
+
+*El backend cargará instantáneamente el nuevo modelo empaquetado.*
+
+NOTA: Se recomienda reentrenar el modelo al menos una vez por semana si el volumen de ventas es alto, para capturar cambios en el comportamiento del consumidor.

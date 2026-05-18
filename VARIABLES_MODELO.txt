@@ -1,0 +1,90 @@
+VARIABLES Y ESPECIFICACIONES DE MODELOS DE PRECIOS DINÁMICOS
+===========================================================
+
+Este documento detalla las variables, especificaciones técnicas e hiperparámetros de los modelos matemáticos y de Machine Learning que soportan el Sistema de Precios Dinámicos.
+
+===========================================================
+PARTE 1: MODELOS UTILIZADOS, ESPECIFICACIONES E HIPERPARÁMETROS
+===========================================================
+
+El sistema de optimización de precios se fundamenta en un enfoque híbrido compuesto por tres modelos específicos: un regresor avanzado para predicción diaria, un modelo de series temporales para tendencias macro, y un modelo estadístico lineal para calcular la elasticidad del precio.
+
+1. MODELO PRINCIPAL DE DEMANDA DIARIA: XGBOOST REGRESSOR
+-------------------------------------------------------
+*   **Rol en el Sistema**: Predicción granular de ventas diarias a nivel SKU-Bodega-Fecha para el simulador de escenarios de la interfaz y la estimación de desviación de demanda.
+*   **Librería**: `xgboost` (`xgb.XGBRegressor` en Python).
+*   **Algoritmo**: eXtreme Gradient Boosting (árboles de decisión potenciados por gradiente).
+*   **Tipo de Tarea**: Regresión continua con soporte nativo de variables categóricas.
+*   **Función de Pérdida (Loss Function)**: `reg:squarederror` (Error cuadrático medio).
+*   **Método de Construcción de Árboles**: `'hist'` (Basado en histogramas, lo cual reduce drásticamente el tiempo de cómputo en datasets masivos).
+
+*   **Hiperparámetros Optimizados**:
+    *   `n_estimators` = `300` : Número de árboles de decisión en la secuencia de ensamble. Aumentado para capturar las nuevas variables de estacionalidad sin perder capacidad predictiva.
+    *   `learning_rate` (eta) = `0.05` : Factor de reducción para la actualización de pesos. Un paso más bajo para garantizar una convergencia suave y estable.
+    *   `max_depth` = `5` : Profundidad máxima por árbol. Reducido de 6 a 5 para simplificar los árboles individuales y prevenir el sobreajuste.
+    *   `subsample` = `0.8` : Fracción de las filas del dataset seleccionadas aleatoriamente para entrenar cada árbol. Aporta regularización estocástica.
+    *   `colsample_bytree` = `0.8` : Fracción de variables (columnas) seleccionadas al azar para cada árbol. Previene la dominancia excesiva de una sola característica.
+    *   `reg_alpha` (Regularización L1 / Lasso) = `0.1` : Fomenta la dispersión de pesos de los árboles, apagando ramas poco informativas.
+    *   `reg_lambda` (Regularización L2 / Ridge) = `1.0` : Penaliza pesos de hojas extremos, garantizando predicciones suaves.
+    *   `enable_categorical` = `True` : Habilita el tratamiento óptimo y nativo de variables categóricas (como marca, categoría y región) sin necesidad de codificación One-Hot manual.
+    *   `random_state` = `42` : Semilla de aleatoriedad fija para garantizar la reproducibilidad exacta de los resultados y métricas de prueba.
+
+2. MODELO DE TENDENCIAS MACRO: META PROPHET
+-------------------------------------------
+*   **Rol en el Sistema**: Pronóstico de demanda de largo plazo y separación de tendencias macroeconómicas a nivel de categorías agregadas.
+*   **Librería**: `prophet` (desarrollado por Meta).
+*   **Especificaciones**: 
+    *   Modelo aditivo de regresión temporal compuesto por tres componentes principales: $y(t) = g(t) + s(t) + h(t) + \epsilon_t$
+    *   $g(t)$ (Tendencia lineal o logística a trozos): Captura el crecimiento a largo plazo y detecta puntos de cambio automáticos en la tendencia de ventas.
+    *   $s(t)$ (Estacionalidades): Modelado mediante series de Fourier para capturar ciclos semanales y anuales con precisión.
+    *   $h(t)$ (Efecto Festivos): Incorporación de calendarios promocionales colombianos o días especiales del comercio (ej: Día sin IVA).
+
+3. MODELO DE ELASTICIDAD DE PRECIO: REGRESIÓN LOG-LOG
+-----------------------------------------------------
+*   **Rol en el Sistema**: Estimación del coeficiente de elasticidad del precio ($\epsilon$) para establecer los límites máximos y mínimos sugeridos de descuento.
+*   **Fórmula Matemática**: $\ln(Q) = \beta_0 + \beta_1 \ln(P) + \gamma X + u$
+    *   Donde $\ln(Q)$ es el logaritmo natural de la cantidad vendida.
+    *   $\ln(P)$ es el logaritmo natural del precio unitario.
+    *   El coeficiente estimado $\beta_1$ representa directamente la **elasticidad-precio de la demanda** (el porcentaje en que cambia la demanda ante un incremento del 1% en el precio).
+*   **Especificaciones y Diagnósticos**:
+    *   Estimación mediante Mínimos Cuadrados Ordinarios (OLS).
+    *   Validación de supuestos Gauss-Markov clásicos: análisis de homocedasticidad (test de Breusch-Pagan), normalidad de residuos (Q-Q plots y test de Jarque-Bera) y ausencia de multicolinealidad (VIF < 5 en variables de control).
+
+
+===========================================================
+PARTE 2: VARIABLES DE ENTRADA DEL MODELO OPTIMIZADO
+===========================================================
+
+A continuación se detalla la lista de variables (features) utilizadas en el entrenamiento del regresor XGBoost para estimar la demanda en vivo:
+
+1. VARIABLES DE NEGOCIO Y OPERATIVAS (2)
+---------------------------------------
+*   `precio_promedio`    [Continua] : El precio promedio cobrado por el SKU durante el día. Modela la curva de elasticidad.
+*   `stock_actual`       [Continua] : El volumen de unidades físicas disponibles en bodega para ese SKU. Evita predicciones de venta falsas si hay desabastecimiento.
+
+2. VARIABLES DE ESTACIONALIDAD TEMPORAL (3)
+-------------------------------------------
+*   `mes`                [Entera, 1-12] : El mes del año en que ocurre la venta. Captura temporadas de moda, temporadas escolares, navidad, etc.
+*   `dia_semana`         [Entera, 0-6] : Día de la semana (0=Lunes, 6=Domingo). Capta el incremento natural de tráfico y consumo de fines de semana.
+*   `es_fin_de_semana`   [Booleana, 0-1] : Bandera rápida que le ayuda a los árboles a segmentar los días festivos/descanso (Sábado y Domingo).
+
+3. VARIABLES DE RETRASO HISTÓRICO (MEMORIA) (3)
+------------------------------------------------
+*   `cantidad_lag_1`     [Continua] : Cantidad vendida del mismo SKU en la misma bodega hace 1 día. Captura la inercia diaria de la demanda.
+*   `cantidad_lag_7`     [Continua] : Cantidad vendida del mismo SKU en la misma bodega hace exactamente 1 semana (hace 7 días). Captura la inercia semanal.
+*   `cantidad_roll_mean_7` [Continua] : Promedio móvil de ventas de los últimos 7 días. Filtra el ruido diario ofreciendo una tendencia suavizada.
+
+4. VARIABLES CATEGÓRICAS / DIMENSIONALES (6)
+--------------------------------------------
+*   `id_producto`        [Categoría] : Identificador único del SKU.
+*   `id_bodega`          [Categoría] : Identificador de la ubicación de almacenamiento físico.
+*   `marca`              [Categoría] : Marca del producto (permite elasticidades diferenciadas según valor de marca).
+*   `categoria`          [Categoría] : Categoría general del producto (ej: BLUSA, JEAN, CALZADO).
+*   `subcategoria`       [Categoría] : Tipo de artículo detallado (ej: BODY, SLIM_FIT).
+*   `genero`             [Categoría] : Segmentación del público objetivo (ej: FEMENINO, MASCULINO, UNISEX).
+*   `ciudad`             [Categoría] : Ciudad municipal donde está ubicada la bodega.
+*   `region`             [Categoría] : Región geográfica del almacén.
+
+===========================================================
+FECHA DE ACTUALIZACIÓN: 17 de Mayo de 2026
+ESTADO DE MODELACIÓN: 100% Documentado y Entrenado.
