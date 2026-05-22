@@ -1,13 +1,10 @@
 """
-train_and_save.py
 =================
 Ejecutar UNA VEZ para entrenar el modelo XGBoost con los parquets locales
-y guardar los artefactos en backend/model/.
 
 Uso:
     python backend/train_and_save.py
 
-Después el backend arranca en < 1 segundo cargando el modelo desde disco.
 """
 
 import json
@@ -21,8 +18,8 @@ import xgboost as xgb
 warnings.filterwarnings("ignore")
 
 # ── Rutas ─────────────────────────────────────────────────────────────────────
-ROOT      = Path(__file__).parent.parent          # raíz del proyecto
-MODEL_DIR = Path(__file__).parent / "model"       # backend/model/
+ROOT      = Path(__file__).parent.parent          
+MODEL_DIR = Path(__file__).parent / "model"       
 MODEL_DIR.mkdir(exist_ok=True)
 
 # ── 1. Cargar parquets locales ────────────────────────────────────────────────
@@ -139,12 +136,12 @@ mape = np.mean(np.abs((y_test - y_pred) / (y_test.clip(lower=1)))) * 100
 print(f"   MAPE en test (Optimizado): {mape:.1f}%")
 
 # ── 4. Guardar artefactos ─────────────────────────────────────────────────────
-print("\n💾 Guardando artefactos en backend/model/ ...")
+print("\nGuardando artefactos en backend/model/ ...")
 
 # 4a. Modelo XGBoost en formato nativo JSON
 model_path = MODEL_DIR / "xgb_model.json"
 modelo_xgb.save_model(str(model_path))
-print(f"   ✅ {model_path.name}  ({model_path.stat().st_size / 1024:.0f} KB)")
+print(f"   {model_path.name}  ({model_path.stat().st_size / 1024:.0f} KB)")
 
 # 4b. Lista de features
 features_path = MODEL_DIR / "features.json"
@@ -168,7 +165,7 @@ for col in df_save.select_dtypes(["category"]).columns:
 
 df_path = MODEL_DIR / "df_ml.parquet"
 df_save.to_parquet(df_path, index=False)
-print(f"   ✅ {df_path.name}  ({df_path.stat().st_size / 1024 / 1024:.1f} MB)")
+print(f"   {df_path.name}  ({df_path.stat().st_size / 1024 / 1024:.1f} MB)")
 
-print("\n🎉 Listo. Ahora el backend arranca instantáneamente.")
+print("\n Listo. Ahora el backend arranca instantáneamente.")
 print(f"   Artefactos en: {MODEL_DIR}")
